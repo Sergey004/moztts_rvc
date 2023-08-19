@@ -8,18 +8,38 @@ import re
 import subprocess
 import json
 import glob, os
-
+from dotenv import load_dotenv
+# Read .env file
+load_dotenv()
+from scipy.io import wavfile 
 from TTS.api import TTS
 from TTS.utils.manage import ModelManager
 from TTS.utils.synthesizer import Synthesizer
 
+from .rvc_infer  import get_vc, vc_single
+
+# RVC Section
+rvc_model_path = Path(os.environ.get('RVC_MODEL_PATH', 'extensions/moztts_rvc/Retrieval-based-Voice-Conversion-WebUI/weights/')) #Replace with your own
+device="cuda:0"
+is_half=True
+
+index_rate = 0.75
+f0up_key = 0
+filter_radius = 3
+rms_mix_rate = 0.25
+protect = 0.33
+resample_sr = "48000"
+f0method = os.environ.get("F0_METHOD", 'rmvpe').lower() #harvest or pm
+rvc_index_path = Path(os.environ.get('RVC_INDEX_PATH', 'extensions/moztts_rvc/Retrieval-based-Voice-Conversion-WebUI/logs/')) #Replace with your own
+# End RVC section
+
 torch._C._jit_set_profiling_mode(False)
 
 global tts_character_config
-with open('extensions/moztts/tts_config.json') as f:
+with open('extensions/moztts_rvc/tts_config.json') as f:
     ttsconfig = json.load(f)
 
-with open('extensions/moztts/tts_character_config.json') as f:
+with open('extensions/moztts_rvc/tts_character_config.json') as f:
     tts_character_config = json.load(f)
 
 
@@ -37,7 +57,7 @@ params = {
 # load model manager
 MODEL_PATH = './tts_model/best_model.pth.tar'
 CONFIG_PATH = './tts_model/config.json'
-path = "extensions/moztts/models.json"
+path = "extensions/moztts_rvc/models.json"
 manager = ModelManager(path, progress_bar=True)
 
 tts_path = None
@@ -203,7 +223,7 @@ def state_modifier(state):
 
 def clear_output_dir():
     # Specify the directory you want to delete files from
-    dir_path = 'extensions/moztts/outputs/'
+    dir_path = 'extensions/moztts_rvc/outputs/'
 
     # Use glob to match all files in the directory
     files = glob.glob(f'{dir_path}/*')
@@ -217,7 +237,7 @@ def input_modifier(string):
     global old_params, current_params
     # save changes back to json. Sadly Gradio can't just send events when something changed, so : every time.
     if( old_params != params):
-        with open('extensions/moztts/tts_config.json', 'w') as f:
+        with open('extensions/moztts_rvc/tts_config.json', 'w') as f:
             json.dump(params, f, indent=4)
             current_params = params.copy()
             old_params = params.copy()
@@ -262,35 +282,34 @@ def output_modifier(string, state):
     if string == '':
         string = '*Empty reply, try regenerating*'
     else:
-        output_file = Path(f'extensions/moztts/outputs/{state["character_menu"]}_{int(time.time())}.wav')
+        output_file = Path(f'extensions/moztts_rvc/outputs_temp/{state["character_menu"]}_{int(time.time())}.wav')
         tts(string, output_file)
-        # voice_string = f'--model_name={params["voice"]}'
-        # if "vocoder" in params['voice']:
-        #     voice_string = f'--vocoder_name={params["voice"]}'
-        # command = ["tts",f'--text="{string}"', f"{voice_string}","--emotion=true",f'--use_cuda={params["use_cuda"]}' ,f'--out_path={output_file}']
-        # if params["speaker"] != "":
-        #     speaker_string = f"--speaker_idx={params['speaker']}"
-        #     command.append(speaker_string)
-        # subprocess.run(command, capture_output=True, text=True)
 
+        wav_opt = vc_single(0,output_file,f0up_key,None,f0method,rvc_index_path,index_rate, filter_radius=filter_radius, resample_sr=resample_sr, rms_mix_rate=rms_mix_rate, protect=protect)
+
+        wavfile.write(Path(f'extensions/moztts_rvc/outputs/{state["character_menu"]}_{int(time.time())}.wav'), resample_sr, wav_opt)
+
+        output_file_rvc_as_path = Path(f'extensions/moztts_rvc/outputs/{state["character_menu"]}_{int(time.time())}.wav')
+        
         autoplay = 'autoplay' if params['autoplay'] else ''
-        string = f'<audio src="file/{output_file.as_posix()}" controls {autoplay}></audio>'
+        string = f'<audio src="file/{output_file_rvc_as_path.as_posix()}" controls {autoplay}></audio>'
         if params['show_text']:
             string += f'\n\n{original_string}'
-
     shared.processing_message = "*Is typing...*"
     return string
 
 
 def setup():
+    get_vc(rvc_model_path, device, is_half)
     pass
+    
 
 def ui():
     model_list = load_model_list()
     speaker_list = load_speaker_list(params['voice'])
 
     # Gradio elements
-    with gr.Accordion("Mozilla TTS"):
+    with gr.Accordion("Mozilla (Coqui TTS) TTS + RVC"):
         with gr.Row():
             activate = gr.Checkbox(value=params['activate'], label='Activate TTS')
             autoplay = gr.Checkbox(value=params['autoplay'], label='Play TTS automatically')

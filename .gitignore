@@ -1,0 +1,12 @@
+user_data
+*pycache*
+*/*pycache*
+*/*/pycache*
+venv/
+.venv/
+.vscode
+repositories
+outputs/*
+outputs_temp/*
+hubert_base.pt
+rmvpe.pt
